@@ -3,6 +3,7 @@ package example;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PrintStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 
@@ -11,6 +12,9 @@ public final class Main {
     private Main() {}
 
     public static void main(String[] args) throws Exception {
+        // 标准输出也固定 UTF-8，避免 Windows 控制台编码影响中文重定向日志。
+        System.setOut(new PrintStream(System.out, true, StandardCharsets.UTF_8));
+        System.setErr(new PrintStream(System.err, true, StandardCharsets.UTF_8));
         String command = args.length == 0 ? "--help" : args[0];
         switch (command) {
             case "--help" -> System.out.println("native-demo: --version | --self-test | --serve [port]");

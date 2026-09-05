@@ -270,6 +270,9 @@ def package():
 
 
 if __name__ == "__main__":
+    # Windows runner 重定向输出默认可能是 CP1252，中文日志必须显式使用 UTF-8。
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
     commands = {"configure": configure, "build": build, "verify": verify, "package": package}
     if len(sys.argv) != 2 or sys.argv[1] not in commands:
         sys.exit("用法：native_ci.py configure|build|verify|package")
