@@ -12,7 +12,15 @@
 
 ## Release 发布
 
-正在对补充 Release 发布步骤后的工作流进行完整验证；完成后补充长期下载链接与最终产物校验结果。
+- [最终完整 Actions：33972744774](https://github.com/yumengjh/java-native-template/actions/runs/33972744774)：五种原生目标、Release 发布、最终汇总全部成功。
+- [正式 Release native-3](https://github.com/yumengjh/java-native-template/releases/tag/native-3)，源码提交 `a9bfd6eb52f3ba30c845dadca57e5611ef32ed8f`。
+- Release 已公开，包含五个压缩包、五个 SHA-256 文件，共十个资产。每个包内有构建信息，资产在 GitHub runner 汇总时复核了完整性与校验和。
+- [最新 Mac ARM64 直接下载](https://github.com/yumengjh/java-native-template/releases/latest/download/native-demo-macos-arm64.tar.gz)。
+- 已从正式 Release 下载 macOS ARM64 包并在本机重新验证，而非只复用上一轮 Actions artifact。
+- Release Mac 包大小 7,156,296 bytes；解压二进制 17,661,096 bytes。
+- Release Mac 包 SHA-256：`b18d111510fac9219957da20fc8cc2fb97ff4c476073f4ad8016bed08b9d265b`。
+- 内嵌提交与运行 ID 与 Release 对应；在不可用 PATH / JAVA_HOME / GRAALVM_HOME 下，CLI 中文资源自检和 HTTP 检查再次通过，服务进程已回收。
+- 本地仅保留 `downloads/native-3/` 中的最终 Mac 下载包、校验文件和解压结果；已清理上一轮重复的下载目录。没有下载或安装额外工具、Maven/Gradle 依赖。
 
 默认示例验证范围：原生文件格式和 CPU 架构、CLI 自检、中文资源加载、HTTP 健康接口、压缩包 SHA-256。
 
