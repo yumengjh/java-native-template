@@ -1,0 +1,15 @@
+target/
+build/
+.gradle/
+.idea/
+.DS_Store
+*.iml
+__pycache__/
+.verification/
+downloads/
+dist/
+native-logs/
+# 本次执行的本机规划记录不属于可复用模板。
+task_plan.md
+findings.md
+progress.md

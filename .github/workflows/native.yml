@@ -1,0 +1,139 @@
+name: Java 21 原生二进制
+
+# 只允许手动触发；提交与打标签不会自动消耗构建资源。
+on:
+  workflow_dispatch:
+
+# ==================== 通常只需修改这里 ====================
+env:
+  # graalvm = Oracle GraalVM；graalvm-community = 社区版。
+  # 21 表示获取该发行版可用的 Java 21 更新；要完全锁定可填具体补丁版本。
+  GRAALVM_DISTRIBUTION: graalvm
+  JAVA_VERSION: '21'
+  PROJECT_DIR: '.'
+  BUILD_TOOL: maven # maven 或 gradle；优先使用项目自己的 Wrapper。
+  # JSON 数组：每个参数单独一项，路径带空格也不需要再套 shell 引号。
+  # Maven 示例的 native profile 已绑定原生编译；Spring/Quarkus 参数见 docs/adapters.md。
+  BUILD_ARGS_JSON: '["--batch-mode", "--no-transfer-progress", "clean", "package", "-Pnative"]'
+  # 相对于 PROJECT_DIR，必须明确指出一个原生可执行文件，不能填 *.jar。
+  # {exe} 会在 Windows 替换为 .exe，其余平台替换为空字符串。
+  BINARY_PATH: 'target/native-demo{exe}'
+  ARTIFACT_NAME: native-demo
+  # 可裁剪目标集合。GraalVM 21 没有 Windows ARM64，添加该目标会在预检时报错。
+  TARGETS_JSON: '["linux-amd64", "linux-arm64", "macos-amd64", "macos-arm64", "windows-amd64"]'
+  # 固定 OS 标签，避免 latest 随时间切换架构或系统基线。
+  RUNNERS_JSON: >-
+    {"linux-amd64":"ubuntu-22.04", "linux-arm64":"ubuntu-22.04-arm",
+     "macos-amd64":"macos-15-intel", "macos-arm64":"macos-14",
+     "windows-amd64":"windows-2022"}
+  # 冒烟验证：cli / http / both / none。示例同时支持 CLI 与 HTTP。
+  # GUI 请提供能自动退出的 --self-test，再选 cli；none 仅表示未做运行验证。
+  SMOKE_MODE: both
+  CLI_ARGS_JSON: '["--self-test"]'
+  CLI_EXPECT: 'SELF_TEST_OK'
+  HTTP_ARGS_JSON: '["--serve", "18080"]'
+  HEALTH_URL: 'http://127.0.0.1:18080/health'
+  HEALTH_EXPECT: '"status":"UP"'
+  SMOKE_TIMEOUT_SECONDS: '45'
+  # 额外分发文件/目录，路径相对于 PROJECT_DIR，拷贝到压缩包根目录。
+  # 如 ["config", "target/foo.dll"]。不做全目录扫描，避免混入源码/凭据。
+  PACKAGE_FILES_JSON: '[]'
+  RETENTION_DAYS: '14'
+# ==================== 配置区结束 ====================
+
+# 工作流只读取源码、上传 Actions artifact，不创建 Release、不发布仓库外内容。
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  configure:
+    name: 校验配置与平台
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.config.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      # env 不能直接用于 strategy.matrix，因此先校验并转成 job output。
+      - id: config
+        run: python3 .github/scripts/native_ci.py configure
+
+  build:
+    name: 构建 ${{ matrix.target }}
+    needs: configure
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false # 一个平台失败，其余平台继续给出完整结果。
+      matrix: ${{ fromJSON(needs.configure.outputs.matrix) }}
+    env:
+      NATIVE_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 所有依赖下载只发生在 GitHub runner；不在用户电脑安装 GraalVM。
+      # setup-graalvm 同时设置 JAVA_HOME、PATH，并在 Windows 准备 MSVC 环境。
+      - name: 安装 GraalVM 21 并缓存构建依赖
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.GRAALVM_DISTRIBUTION }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: ${{ env.BUILD_TOOL }}
+          native-image-job-reports: 'true'
+
+      # 默认 Linux 是 glibc 动态链接，不是 Alpine/musl 完全静态程序。
+      - name: 准备 Linux C 工具链
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential zlib1g-dev
+
+      - name: 构建原生程序
+        run: python3 .github/scripts/native_ci.py build
+
+      - name: 检查真实二进制架构并运行冒烟验证
+        run: python3 .github/scripts/native_ci.py verify
+
+      - name: 打包并生成 SHA-256 与构建信息
+        run: python3 .github/scripts/native_ci.py package
+
+      # Unix 先 tar 再上传，保留可执行权限；Windows 输出 zip。
+      - name: 上传可分发产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: ${{ env.RETENTION_DAYS }}
+
+      - name: 保存构建与启动日志（失败时也保留）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.target }}
+          path: native-logs/
+          if-no-files-found: ignore
+          retention-days: ${{ env.RETENTION_DAYS }}
+
+  result:
+    name: 汇总
+    if: always()
+    needs: [configure, build]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 写入最终状态
+        env:
+          CONFIG_RESULT: ${{ needs.configure.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: |
+          echo "配置检查：$CONFIG_RESULT；构建矩阵：$BUILD_RESULT" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Windows ARM64：GraalVM 21 暂不支持，未构建、未冒充 AMD64 产物。' >> "$GITHUB_STEP_SUMMARY"
+          test "$CONFIG_RESULT" = success && test "$BUILD_RESULT" = success
