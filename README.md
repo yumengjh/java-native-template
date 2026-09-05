@@ -1,6 +1,6 @@
 # Java 21 原生二进制工作流模板
 
-把 Java 项目通过 **Oracle GraalVM for JDK 21 Native Image** 编译为可直接运行的程序。手动触发 GitHub Actions，按系统和 CPU 架构分别构建、检查、运行、压缩并上传产物。
+把 Java 项目通过 **Oracle GraalVM for JDK 21 Native Image** 编译为可直接运行的程序。手动触发 GitHub Actions，按系统和 CPU 架构分别构建、检查、运行、压缩，全部成功后发布到 **GitHub Release**，提供长期下载。
 
 这是一个可复制的构建模板，包含能运行的 **Maven CLI + HTTP 示例**。框架的 AOT、反射元数据、GUI 工具包适配属于项目配置，不能由一个通用 YAML 自动推断。Spring Boot、Quarkus、Javalin、Gradle 和 GUI 的接入示例见 [框架接入说明](docs/adapters.md)。
 
@@ -21,10 +21,24 @@
 
 1. 将本项目推送到 GitHub 默认分支。
 2. 打开 **Actions → Java 21 原生二进制 → Run workflow**，选择分支并运行。
-3. 等待五个平台任务完成，在该次运行的 **Artifacts** 区下载对应目标。
-4. 下载后先解开 Actions 提供的外层 ZIP，再校验并解压内部 `tar.gz` 或 `zip`。
+3. 等待五个平台与 Release 发布任务完成，在仓库 **Releases** 页面下载对应目标和 `.sha256`。
+4. 校验并解压 `tar.gz` 或 `zip`，直接运行程序。
 
-工作流没有 `push`、`pull_request` 或标签触发，不会自动发布 Release。公开仓库使用标准 runner；私有仓库应自行确认 Actions 配额。
+工作流没有 `push`、`pull_request` 或标签触发；**每次手动构建成功都会自动创建一个 Release**。默认标签为 `native-<运行序号>`，可以在顶部改成自己的版本号；已有 Release 不会被覆盖。公开仓库使用标准 runner；私有仓库应自行确认 Actions 配额。
+
+## 最终文件在哪里，链接保留多久
+
+| 位置 | 内容 | 保留方式 |
+| --- | --- | --- |
+| GitHub Release | 五种原生压缩包、各自的 SHA-256；包内含 build-info.json | 不受 Actions 过期策略影响，保留到仓库/Release/资产被删除 |
+| Actions Artifacts | 同次运行的分发包和故障排查日志 | 默认 14 天，顶部可调整 |
+| 本机项目的 downloads/ | 仅下载用于本机验证的 Mac 产物 | 本地保留，已被 Git 忽略，不上传仓库源码 |
+
+本仓库的 [最新正式 Release](https://github.com/yumengjh/java-native-template/releases/latest) 是长期入口。
+固定版本链接格式为 `https://github.com/<owner>/<repo>/releases/download/<tag>/<文件名>`；最新 macOS ARM64 压缩包入口为 [下载最新 Mac ARM64](https://github.com/yumengjh/java-native-template/releases/latest/download/native-demo-macos-arm64.tar.gz)。
+固定版本 URL 指向那一版，`latest` URL 会跟随后续正式发布。公开仓库 Release 可直接下载，无需 Actions 页面权限。这不意味着永久托管保证：删除仓库、Release、资产，或改变访问权限都会影响下载。
+
+Actions 的 artifact 下载仍可用于调试，但需要先解开它的外层 ZIP，且会过期。不要把它当作面向使用者的最终发布链接。
 
 macOS ARM64 示例（在下载产物目录执行）：
 
@@ -64,6 +78,7 @@ curl http://127.0.0.1:8080/health
 | `HTTP_ARGS_JSON` / `HEALTH_URL` / `HEALTH_EXPECT` | 服务启动参数、本地健康接口、预期响应内容 |
 | `SMOKE_TIMEOUT_SECONDS` | 单项运行验证的超时；默认 45 秒 |
 | `PACKAGE_FILES_JSON` | 需要随程序分发的额外文件或目录；默认不带其他文件 |
+| `RELEASE_TAG` | 正式 Release 的版本标签；默认每次运行生成独立标签 |
 | `RETENTION_DAYS` | 产物及日志保留时间；默认 14 天 |
 
 所有 `*_ARGS_JSON` 都是 JSON 字符串数组，每个命令行参数单独一项。不要填写 `mvn` / `./gradlew`，脚本会优先选择项目 Wrapper。没有 Maven Wrapper 时使用 runner 自带 Maven；Gradle 必须提交 Wrapper，包括它的配置文件和 JAR。
@@ -102,7 +117,7 @@ macOS runner 固定为 macOS 14 ARM64、macOS 15 Intel；默认只验证这两�
 
 ## 排查失败
 
-在 Actions 对应 job 查看失败步骤，并下载 `logs-<target>`，里面包含实际 GraalVM 版本、构建输出和程序启动日志。各平台互不取消，能一次看到完整结果。构建可通过但验证失败时，不上传可分发产物。
+在 Actions 对应 job 查看失败步骤，并下载 `logs-<target>`，里面包含实际 GraalVM 版本、构建输出和程序启动日志。各平台互不取消，能一次看到完整结果。构建可通过但验证失败时，不上传该平台的可分发产物；任一平台失败，整个 Release 都不会发布。资产会先上传到草稿，全部上传成功后才公开。如果发布上传中断留下草稿，检查原因后删除未完成草稿再重试，或使用新版本标签；模板不会覆盖已经发布的资产。
 
 本模板不会给本机安装依赖。GitHub runner 会下载构建所需的 GraalVM、Maven/Gradle 依赖及 C 工具链；有意在本机执行 `mvn` / Wrapper 时，则由构建工具按自身配置获取依赖。
 
@@ -113,3 +128,4 @@ macOS runner 固定为 macOS 14 ARM64、macOS 15 Intel；默认只验证这两�
 - [GraalVM Community JDK 21 平台列表](https://github.com/graalvm/graalvm-ce-builds/releases/tag/jdk-21.0.2)
 - [GitHub 标准 runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 - [Native Image 元数据](https://www.graalvm.org/jdk21/reference-manual/native-image/metadata/)
+- [GitHub Release 固定与 latest 下载链接](https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases)

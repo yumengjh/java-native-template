@@ -76,6 +76,8 @@ def configure():
         raise ValueError("无效的 SMOKE_MODE")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", setting("ARTIFACT_NAME")):
         raise ValueError("ARTIFACT_NAME 只能含字母、数字、点、横杠、下划线")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", setting("RELEASE_TAG")) or ".." in setting("RELEASE_TAG") or setting("RELEASE_TAG").endswith("."):
+        raise ValueError("RELEASE_TAG 应为 native-3 或 v1.0.0 这样的有效版本标签")
     if not json_list("BUILD_ARGS_JSON"):
         raise ValueError("构建参数不能为空")
     for name in ("CLI_ARGS_JSON", "HTTP_ARGS_JSON", "PACKAGE_FILES_JSON"):
@@ -269,13 +271,49 @@ def package():
     summary(f"已打包：{archive.name}；SHA-256：{digest}")
 
 
+def release_notes():
+    """在 GitHub runner 汇总资产，拒绝漏平台、未知文件和校验和不匹配。"""
+    dist = ROOT / "dist"
+    targets = json_list("TARGETS_JSON")
+    expected_files = set()
+    rows = []
+    for target in targets:
+        extension = ".zip" if target.startswith("windows-") else ".tar.gz"
+        name = setting("ARTIFACT_NAME") + "-" + target + extension
+        expected_files.update({name, name + ".sha256"})
+        checksum = (dist / (name + ".sha256")).read_text(encoding="utf-8").split()
+        if len(checksum) != 2 or checksum[1] != name:
+            raise ValueError(f"校验文件格式不正确：{name}")
+        hasher = hashlib.sha256()
+        with (dist / name).open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        if hasher.hexdigest() != checksum[0]:
+            raise ValueError(f"SHA-256 不一致：{name}")
+        rows.append(f"| {target} | `{name}` | `{checksum[0]}` |")
+    if {p.name for p in dist.iterdir()} != expected_files:
+        raise ValueError("发布目录包含缺失或未知资产")
+    body = (f"GraalVM for JDK {setting('JAVA_VERSION')} 原生构建。\n\n"
+            f"源码提交：`{setting('GITHUB_SHA')}`\n\n"
+            f"[构建记录](https://github.com/{setting('GITHUB_REPOSITORY')}/actions/runs/{setting('GITHUB_RUN_ID')})\n\n"
+            f"所有选定目标的文件架构检查和配置的验证已完成；运行验证模式：`{setting('SMOKE_MODE')}`。\n\n"
+            "Windows ARM64：GraalVM 21 暂不支持，未构建。\n\n"
+            "| 目标 | 下载资产 | SHA-256 |\n| --- | --- | --- |\n" + "\n".join(rows) +
+            "\n\n直接下载下方压缩包，无需解压 Actions 的外层 ZIP。macOS/Linux 解压 tar.gz 保留执行权限。"
+            "每个包内含 build-info.json。Release 资产不受 Actions 14 天保留期影响；"
+            "仓库、Release 或资产被删除时，下载链接将失效。\n")
+    (ROOT / "release-notes.md").write_text(body, encoding="utf-8")
+    summary(f"Release 资产校验通过：{len(targets)} 个目标、{len(expected_files)} 个文件")
+
+
 if __name__ == "__main__":
     # Windows runner 重定向输出默认可能是 CP1252，中文日志必须显式使用 UTF-8。
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
-    commands = {"configure": configure, "build": build, "verify": verify, "package": package}
+    commands = {"configure": configure, "build": build, "verify": verify,
+                "package": package, "release-notes": release_notes}
     if len(sys.argv) != 2 or sys.argv[1] not in commands:
-        sys.exit("用法：native_ci.py configure|build|verify|package")
+        sys.exit("用法：native_ci.py configure|build|verify|package|release-notes")
     try:
         commands[sys.argv[1]]()
     except Exception as error:

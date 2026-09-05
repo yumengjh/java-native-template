@@ -38,10 +38,13 @@ env:
   # 额外分发文件/目录，路径相对于 PROJECT_DIR，拷贝到压缩包根目录。
   # 如 ["config", "target/foo.dll"]。不做全目录扫描，避免混入源码/凭据。
   PACKAGE_FILES_JSON: '[]'
+  # 每次手动构建创建独立版本，避免覆盖旧下载链接。也可手动改为 v1.0.0 等。
+  # 同一个 tag 已有 Release 时会失败，不覆盖已发布资产。
+  RELEASE_TAG: 'native-${{ github.run_number }}'
   RETENTION_DAYS: '14'
 # ==================== 配置区结束 ====================
 
-# 工作流只读取源码、上传 Actions artifact，不创建 Release、不发布仓库外内容。
+# 默认只读；仅最后的 Release job 获得 contents: write 权限。
 permissions:
   contents: read
 
@@ -123,17 +126,48 @@ jobs:
           if-no-files-found: ignore
           retention-days: ${{ env.RETENTION_DAYS }}
 
+  release:
+    name: 发布长期下载 Release
+    needs: [configure, build] # 所有选定平台构建/验证/上传成功才发布。
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: 收集本次运行的全部分发包
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ env.ARTIFACT_NAME }}-*
+          path: dist
+          merge-multiple: true
+      - name: 校验平台完整性、SHA-256 并生成发布说明
+        run: python3 .github/scripts/native_ci.py release-notes
+      - name: 上传资产后发布正式 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 先作为草稿创建并上传，全部成功后才公开，避免半套下载被用户看到。
+          # 不使用 --clobber，重复 tag 会明确失败，保留旧版产物。
+          gh release create "$RELEASE_TAG" dist/* \
+            --target "$GITHUB_SHA" --title "$ARTIFACT_NAME $RELEASE_TAG" \
+            --notes-file release-notes.md --draft
+          gh release edit "$RELEASE_TAG" --draft=false --latest
+          echo "长期下载：https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
+
   result:
     name: 汇总
     if: always()
-    needs: [configure, build]
+    needs: [configure, build, release]
     runs-on: ubuntu-22.04
     steps:
       - name: 写入最终状态
         env:
           CONFIG_RESULT: ${{ needs.configure.result }}
           BUILD_RESULT: ${{ needs.build.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
         run: |
           echo "配置检查：$CONFIG_RESULT；构建矩阵：$BUILD_RESULT" >> "$GITHUB_STEP_SUMMARY"
+          echo "Release 发布：$RELEASE_RESULT" >> "$GITHUB_STEP_SUMMARY"
           echo 'Windows ARM64：GraalVM 21 暂不支持，未构建、未冒充 AMD64 产物。' >> "$GITHUB_STEP_SUMMARY"
-          test "$CONFIG_RESULT" = success && test "$BUILD_RESULT" = success
+          test "$CONFIG_RESULT" = success && test "$BUILD_RESULT" = success && test "$RELEASE_RESULT" = success

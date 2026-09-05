@@ -9,6 +9,7 @@ __pycache__/
 downloads/
 dist/
 native-logs/
+release-notes.md
 # 本次执行的本机规划记录不属于可复用模板。
 task_plan.md
 findings.md
