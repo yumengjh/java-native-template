@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>单二进制资源示例</title>
+  <!-- 全部资源由当前程序提供，不引用 CDN、远程字体或外部图片。 -->
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <img src="/logo.png" width="48" height="48" alt="内嵌像素图标">
+    <h1>页面与服务，装进一个程序</h1>
+    <p>这份 HTML、CSS、JavaScript 和 PNG 图片均来自二进制内的资源。</p>
+    <p>复制可执行文件即可启动，无需额外拷贝前端目录。</p>
+    <button id="check" type="button">检查服务</button>
+    <output id="status" aria-live="polite">点击按钮请求当前程序的 /health 接口。</output>
+  </main>
+</body>
+</html>

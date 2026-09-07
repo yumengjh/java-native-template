@@ -1,5 +1,30 @@
 # 验证记录
 
+## 当前源码：内嵌静态资源（本地离线验证，尚未发布新 Release）
+
+此项变更不属于下方历史 `native-3` 产物。为遵守流量计费约束，本轮未触发远程构建、未下载依赖或新产物。
+
+- 使用本机已经安装的 Oracle GraalVM 21+35.1，直接调用 javac/native-image，开启 `--no-fallback -march=compatibility`；没有运行 Maven/Gradle 下载。
+- 本地生成 Mac ARM64 可执行文件，18,867,288 bytes；HTML、JS、CSS 和 PNG 图片内嵌。
+- 使用更新后的工作流辅助脚本先打包，再解压到源码之外的操作系统临时目录执行验证。
+- 压缩包只包含 `native-demo` 和 `build-info.json` 两个普通文件，没有散落的静态资源。
+- 禁用 PATH/JAVA_HOME/GRAALVM_HOME 后，CLI 中文自检、HTTP 健康检查、四种资源的 HTTP 200/MIME/完整字节比较全部通过。
+- 单独复制一个可执行文件到空目录，验证缺失资源 404、内部资源不暴露、健康路由精确匹配、路径越级拒绝、405 和 HEAD 行为通过。
+- `python3 -m unittest discover -s tests -v`：11 项回归检查通过，包含内容/类型不匹配、外部 URL、损坏压缩包、越级解压、Unix tar 与 Windows zip 解压路径。
+- Python 语法、YAML 解析、JS 语法及 Git diff 格式检查通过。
+- 本轮未执行浏览器 UI 自动化；新版本的 Windows/Linux 原生运行尚未重新验证，不能将历史五平台结果当成本次结果。
+
+本地输出（均被 Git 忽略）：
+
+```text
+.verification/embedded/native-demo       # 可直接运行的 Mac ARM64 单二进制
+.verification/embedded/native-build.log  # 本机离线编译日志
+.verification/embedded/result.json       # 验证摘要
+dist/native-demo-macos-arm64.tar.gz      # 本次本地构建的分发包，尚未发布
+```
+
+本次本地压缩包 SHA-256：`2667aaf8d334357f2a69d771ed176ad7917a853b8cf71db2f7df4e0458a29a2b`。
+
 ## 已通过的构建与本机验证
 
 - [第二轮 Actions：33972073643](https://github.com/yumengjh/java-native-template/actions/runs/33972073643)，提交 `9594d86c6cb449e6f45933591af74132c6a2ab65`。

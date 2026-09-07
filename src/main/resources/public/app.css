@@ -1,0 +1,11 @@
+/* 仅使用本机字体，不请求网络字体。 */
+:root { font-family: system-ui, sans-serif; color: #22372e; background: #f4f5ef; }
+body { margin: 0; padding: 10vh 24px; }
+main { max-width: 680px; margin: auto; }
+h1 { font-size: clamp(1.8rem, 4vw, 2.5rem); letter-spacing: -.03em; }
+p { line-height: 1.8; }
+img { image-rendering: pixelated; }
+button { background: #275b43; color: white; padding: 12px 20px; border: 0; border-radius: 6px; cursor: pointer; }
+button:focus-visible { outline: 3px solid #ba8128; outline-offset: 4px; }
+button:disabled { opacity: .6; cursor: wait; }
+output { display: block; margin-top: 20px; line-height: 1.6; }

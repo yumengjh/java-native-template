@@ -2,7 +2,34 @@
 
 把 Java 项目通过 **Oracle GraalVM for JDK 21 Native Image** 编译为可直接运行的程序。手动触发 GitHub Actions，按系统和 CPU 架构分别构建、检查、运行、压缩，全部成功后发布到 **GitHub Release**，提供长期下载。
 
-这是一个可复制的构建模板，包含能运行的 **Maven CLI + HTTP 示例**。框架的 AOT、反射元数据、GUI 工具包适配属于项目配置，不能由一个通用 YAML 自动推断。Spring Boot、Quarkus、Javalin、Gradle 和 GUI 的接入示例见 [框架接入说明](docs/adapters.md)。
+这是一个可复制的构建模板，默认交付 **单二进制，内嵌 HTML、JS、CSS 和 PNG 图片**，包含能运行的 Maven CLI + HTTP 示例。当前重点是普通 Java/独立混合服务，框架与 GUI 接入说明属于后续适配参考，不能视为已验证支持。
+
+## 单二进制内嵌静态资源
+
+```text
+src/main/resources/
+├── greeting.txt
+├── public/
+│   ├── index.html
+│   ├── app.js
+│   ├── app.css
+│   └── logo.png
+└── META-INF/native-image/example/native-demo/resource-config.json
+```
+
+`public/` 中的前端文件通过 Native Image 资源配置打入二进制。示例服务使用 `getResourceAsStream` 读取 classpath 内容，不转换成磁盘 `File`，不依赖源码目录或启动位置，也不把资源解压到用户磁盘。
+
+运行 `native-demo --serve 8080` 后访问 `http://127.0.0.1:8080/` 可打开示例页面；JS 请求同一个服务的 `/health`。页面没有 CDN、远程字体、遥测或后台轮询。
+
+- **固定 HTML、JS、CSS、图标、图片**：默认内嵌，前后端随同一个程序版本发布；修改资源后要重新构建。
+- **上传文件、运行时生成的数据**：放外部可写目录，不写回内嵌资源。
+- **密码、密钥、部署参数**：通过环境变量或外部配置传入，不放入 `public/` 或二进制。
+
+使用 Vue/React 等前端时，先在构建过程中生成静态产物，再将产物复制到 `src/main/resources/public/` 或 Maven 的资源输出目录，最后执行原生编译。只有被复制到 Java 资源中、且匹配 Native Image 资源规则的文件才会进入二进制。此处没有默认安装 Node 或执行前端依赖下载；项目按实际需要接入自己的构建步骤。
+
+默认 `PACKAGE_FILES_JSON: '[]'`，运行只需解压后的可执行文件；压缩包中的 `build-info.json` 仅记录构建信息。静态资源不会作为散文件放进压缩包。若项目显式配置额外文件，则交付方式变为“程序加附带文件”。
+
+示例只提供静态文件和精确的 `/health` 路由；缺失资源返回 404。需要 SPA history 路由回退时，项目需区分页面路由与 JS/CSS/图片请求，避免用 index.html 掩盖资源丢失。
 
 ## 平台
 
@@ -76,6 +103,7 @@ curl http://127.0.0.1:8080/health
 | `SMOKE_MODE` | `cli`、`http`、`both` 或 `none` |
 | `CLI_ARGS_JSON` / `CLI_EXPECT` | CLI 自检参数及输出中必须出现的文本 |
 | `HTTP_ARGS_JSON` / `HEALTH_URL` / `HEALTH_EXPECT` | 服务启动参数、本地健康接口、预期响应内容 |
+| `HTTP_RESOURCES_JSON` | 静态资源请求路径、预期 MIME 类型和对照源文件；纯 CLI/API 项目设为 `[]` |
 | `SMOKE_TIMEOUT_SECONDS` | 单项运行验证的超时；默认 45 秒 |
 | `PACKAGE_FILES_JSON` | 需要随程序分发的额外文件或目录；默认不带其他文件 |
 | `RELEASE_TAG` | 正式 Release 的版本标签；默认每次运行生成独立标签 |
@@ -95,13 +123,24 @@ BINARY_PATH: 'apps/server/target/server{exe}'
 
 ## 原生构建为什么需要项目适配
 
-- **资源**：模板用 `greeting.txt` 演示资源注册和中文读取；入口类通过 `--self-test` 验证资源确实在产物里。
+- **资源**：模板用 `greeting.txt` 演示中文读取，用 `public/` 演示页面、脚本、样式和 PNG 图片内嵌。
 - **反射、动态代理、序列化、JNI**：构建器无法总是推断运行时访问的内容，须补充元数据或框架 hints。
 - **第三方库**：Native Build Tools 可以加载共享元数据仓库，但不是每个库、版本、调用路径都已覆盖。
 - **初始化时机**：不要全局强行 `--initialize-at-build-time`；读取环境变量、网络、随机数的初始化一般应保留到运行时。
 - **失败边界**：示例开启 `--no-fallback`；构建失败即失败，不用依赖 JVM 的 fallback 代替原生成功。
 - **真实架构**：脚本解析 PE / ELF / Mach-O 文件头；JAR、脚本、与目标不一致的二进制都会被拒绝。
-- **验证范围**：CLI 自检和健康检查只是冒烟测试；迁移真实服务时还应验证 JSON、数据库、模板、TLS 等使用到的路径。
+- **分发验证**：先打包再解压到源码目录外，在解压目录中执行 CLI/HTTP 验证；静态资源必须返回 HTTP 200、正确 MIME 类型和与对照文件完全一致的字节。误返回 HTML、错误版本或图片损坏都不能通过。验证结束后清理服务进程和临时解压目录。
+- **验证范围**：这些检查不执行浏览器里的 JS，也不替代 UI/数据库/TLS 等业务测试。原生程序运行所需资源必须来自内嵌内容或明确的附带文件；验证器仅为比较字节而读取源文件。
+
+例如只验证首页和图片：
+
+```yaml
+HTTP_RESOURCES_JSON: >-
+  [{"path":"/", "source":"src/main/resources/public/index.html", "content_type":"text/html"},
+   {"path":"/logo.png", "source":"src/main/resources/public/logo.png", "content_type":"image/png"}]
+```
+
+`source` 相对 `PROJECT_DIR`；如果前端文件由构建生成，应指向生成后的文件。资源请求只访问健康接口所在的本地服务，不跟随重定向。纯 CLI 或没有静态资源的 API 服务请设为 `HTTP_RESOURCES_JSON: '[]'`。
 
 详细配置和采集命令见 [Native Image 配置示例](docs/native-image.md)。
 

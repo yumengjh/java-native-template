@@ -34,6 +34,14 @@ env:
   HTTP_ARGS_JSON: '["--serve", "18080"]'
   HEALTH_URL: 'http://127.0.0.1:18080/health'
   HEALTH_EXPECT: '"status":"UP"'
+  # 从解压后的程序请求静态资源，比较 MIME 类型与源文件完整字节。
+  # source 相对 PROJECT_DIR；仅供验证器读取，程序仍从二进制内读取资源。
+  # 纯 CLI/API 项目可设为 '[]'。前端构建产物的 source 应指向实际生成目录。
+  HTTP_RESOURCES_JSON: >-
+    [{"path":"/", "source":"src/main/resources/public/index.html", "content_type":"text/html"},
+     {"path":"/app.js", "source":"src/main/resources/public/app.js", "content_type":"text/javascript"},
+     {"path":"/app.css", "source":"src/main/resources/public/app.css", "content_type":"text/css"},
+     {"path":"/logo.png", "source":"src/main/resources/public/logo.png", "content_type":"image/png"}]
   SMOKE_TIMEOUT_SECONDS: '45'
   # 额外分发文件/目录，路径相对于 PROJECT_DIR，拷贝到压缩包根目录。
   # 如 ["config", "target/foo.dll"]。不做全目录扫描，避免混入源码/凭据。
@@ -102,11 +110,11 @@ jobs:
       - name: 构建原生程序
         run: python3 .github/scripts/native_ci.py build
 
-      - name: 检查真实二进制架构并运行冒烟验证
-        run: python3 .github/scripts/native_ci.py verify
-
       - name: 打包并生成 SHA-256 与构建信息
         run: python3 .github/scripts/native_ci.py package
+
+      - name: 解压到独立目录并验证程序及内嵌资源
+        run: python3 .github/scripts/native_ci.py verify
 
       # Unix 先 tar 再上传，保留可执行权限；Windows 输出 zip。
       - name: 上传可分发产物

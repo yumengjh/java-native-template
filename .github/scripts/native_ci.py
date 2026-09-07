@@ -9,9 +9,11 @@ import re
 import shutil
 import socket
 import struct
+import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -59,6 +61,43 @@ def summary(message):
             out.write(message + "\n")
 
 
+def resource_cases():
+    cases = json.loads(os.environ.get("HTTP_RESOURCES_JSON", "[]"))
+    if not isinstance(cases, list):
+        raise ValueError("HTTP_RESOURCES_JSON 必须是对象数组")
+    for case in cases:
+        if not isinstance(case, dict) or set(case) != {"path", "source", "content_type"}:
+            raise ValueError("每个资源检查必须包含 path/source/content_type")
+        if not all(isinstance(value, str) and value for value in case.values()):
+            raise ValueError("资源检查字段必须为非空字符串")
+        path = urllib.parse.urlsplit(case["path"])
+        if not case["path"].startswith("/") or case["path"].startswith("//") or path.scheme or path.netloc or path.fragment or any(ord(c) < 32 for c in case["path"]):
+            raise ValueError("资源检查只接受同一服务的绝对路径，例如 /app.css")
+        inside(project(), case["source"]) # 此时不要求文件存在，可能由构建过程生成。
+    return cases
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, newurl):
+        # 保证本地验证不因重定向意外访问外部网站，也不接受登录页代替资源。
+        return None
+
+
+def check_resources(opener, health_url):
+    origin = urllib.parse.urlsplit(health_url)
+    for case in resource_cases():
+        url = urllib.parse.urlunsplit((origin.scheme, origin.netloc, "", "", "")) + case["path"]
+        expected = inside(project(), case["source"]).read_bytes()
+        with opener.open(url, timeout=5) as response:
+            content_type = response.headers.get_content_type()
+            actual = response.read()
+            if response.status != 200 or content_type != case["content_type"]:
+                raise ValueError(f"资源状态或 MIME 类型不正确：{case['path']} ({response.status}, {content_type})")
+            if actual != expected:
+                raise ValueError(f"资源内容不一致：{case['path']}，可能漏打包、版本过旧或误返回 HTML")
+        summary(f"内嵌资源检查通过：{case['path']}，{content_type}，{len(actual)} bytes")
+
+
 def configure():
     targets = json_list("TARGETS_JSON")
     if not targets or len(set(targets)) != len(targets):
@@ -82,6 +121,7 @@ def configure():
         raise ValueError("构建参数不能为空")
     for name in ("CLI_ARGS_JSON", "HTTP_ARGS_JSON", "PACKAGE_FILES_JSON"):
         json_list(name)
+    resource_cases()
     if not 1 <= int(setting("SMOKE_TIMEOUT_SECONDS")) <= 600:
         raise ValueError("冒烟超时应为 1 到 600 秒")
     if not 1 <= int(setting("RETENTION_DAYS")) <= 90:
@@ -96,13 +136,13 @@ def configure():
     summary("Windows ARM64：GraalVM 21 暂不支持，未加入构建矩阵。")
 
 
-def logged_run(command, name, timeout=None):
+def logged_run(command, name, timeout=None, cwd=None):
     LOGS.mkdir(exist_ok=True)
     print("执行：" + repr([str(x) for x in command]), flush=True)
     # 不使用 eval/shell 拼接；JSON 数组中的参数保持原来的边界。
     with (LOGS / name).open("w", encoding="utf-8") as log:
         if timeout is not None:
-            subprocess.run(command, cwd=project(), stdout=log, stderr=subprocess.STDOUT,
+            subprocess.run(command, cwd=cwd or project(), stdout=log, stderr=subprocess.STDOUT,
                            check=True, timeout=timeout)
         else:
             with subprocess.Popen(command, cwd=project(), stdout=subprocess.PIPE,
@@ -162,8 +202,7 @@ def inspect_binary(path):
     raise ValueError(f"不是支持的原生二进制：{path}")
 
 
-def verify():
-    output = binary()
+def verify_binary(output, run_dir):
     detected = inspect_binary(output)
     if detected != setting("NATIVE_TARGET"):
         raise ValueError(f"实际架构 {detected} 与目标 {setting('NATIVE_TARGET')} 不一致")
@@ -173,7 +212,7 @@ def verify():
     if mode not in {"cli", "http", "both", "none"}:
         raise ValueError("无效冒烟模式")
     if mode in {"cli", "both"}:
-        result = logged_run([str(output)] + json_list("CLI_ARGS_JSON"), "cli.log", timeout)
+        result = logged_run([str(output)] + json_list("CLI_ARGS_JSON"), "cli.log", timeout, cwd=run_dir)
         print(result, flush=True)
         if setting("CLI_EXPECT") not in result:
             raise ValueError("CLI 输出不含预期文本")
@@ -187,10 +226,10 @@ def verify():
         # 先检查端口未被占用，避免误把另一项服务判定为本次构建成功。
         with socket.socket(socket.AF_INET6 if url.hostname == "::1" else socket.AF_INET) as probe:
             probe.bind((url.hostname, url.port or 80))
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         with (LOGS / "http.log").open("w", encoding="utf-8") as log:
             process = subprocess.Popen([str(output)] + json_list("HTTP_ARGS_JSON"),
-                                       cwd=project(), stdout=log, stderr=subprocess.STDOUT)
+                                       cwd=run_dir, stdout=log, stderr=subprocess.STDOUT)
             try:
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:
@@ -207,6 +246,7 @@ def verify():
                     time.sleep(0.25)
                 else:
                     raise TimeoutError("健康检查超时")
+                check_resources(opener, setting("HEALTH_URL"))
                 if process.poll() is not None:
                     raise RuntimeError("健康检查期间服务退出")
             finally:
@@ -222,6 +262,48 @@ def verify():
         summary("运行验证已显式关闭；仅验证文件格式与架构。")
 
 
+def bundle_name():
+    return setting("ARTIFACT_NAME") + "-" + setting("NATIVE_TARGET")
+
+
+def archive_path():
+    extension = ".zip" if setting("NATIVE_TARGET").startswith("windows-") else ".tar.gz"
+    return ROOT / "dist" / (bundle_name() + extension)
+
+
+def verify():
+    archive = archive_path()
+    checksum = archive.with_name(archive.name + ".sha256").read_text().split()
+    with archive.open("rb") as source:
+        hasher = hashlib.sha256()
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    if checksum != [hasher.hexdigest(), archive.name]:
+        raise ValueError("待验证压缩包的 SHA-256 不一致")
+    # 操作系统临时目录不在源码目录内，程序只能依靠分发包中的内容运行。
+    with tempfile.TemporaryDirectory(prefix="native-smoke-") as temp:
+        destination = Path(temp).resolve()
+        if destination.is_relative_to(ROOT):
+            raise ValueError("临时目录不能位于源码目录内，请调整 TMPDIR/TEMP")
+        if archive.suffix == ".zip":
+            with zipfile.ZipFile(archive) as bundle:
+                for member in bundle.infolist():
+                    inside(destination, member.filename)
+                    if stat.S_ISLNK(member.external_attr >> 16):
+                        raise ValueError("分发包不允许符号链接")
+                bundle.extractall(destination)
+        else:
+            with tarfile.open(archive) as bundle:
+                for member in bundle.getmembers():
+                    inside(destination, member.name)
+                    if not (member.isfile() or member.isdir()):
+                        raise ValueError("分发包只允许普通文件和目录")
+                bundle.extractall(destination)
+        run_dir = destination / bundle_name()
+        summary("已解压到源码之外的临时目录，使用分发包目录作为工作目录")
+        verify_binary(run_dir / binary().name, run_dir)
+
+
 def package():
     output = binary()
     target = setting("NATIVE_TARGET")
@@ -229,7 +311,7 @@ def package():
         raise ValueError("打包前架构复检失败")
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
-    name = setting("ARTIFACT_NAME") + "-" + target
+    name = bundle_name()
     # stage 位于构建目录中，避免 upload-artifact 把未压缩目录也上传。
     stage = ROOT / "build" / "native-bundle" / name
     stage.mkdir(parents=True, exist_ok=False)
@@ -250,6 +332,7 @@ def package():
             "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
             "runner_os": platform.platform(), "distribution": setting("GRAALVM_DISTRIBUTION"),
             "requested_java_version": setting("JAVA_VERSION"), "smoke_mode": setting("SMOKE_MODE"),
+            "resource_checks": resource_cases(),
             "native_image_version": (LOGS / "native-image-version.log").read_text(encoding="utf-8")}
     (stage / "build-info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
     if target.startswith("windows-"):

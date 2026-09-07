@@ -5,10 +5,12 @@
 `src/main/resources/META-INF/native-image/example/native-demo/resource-config.json`：
 
 ```json
-{"resources":{"includes":[{"pattern":"\\Qgreeting.txt\\E"}]}}
+{"resources":{"includes":[{"pattern":"\\Qgreeting.txt\\E"},{"pattern":"\\Qpublic/\\E.*"}]}}
 ```
 
-它告诉构建器把 `greeting.txt` 放进二进制。实际项目应精准包含需要的模板、静态文件、证书或国际化资源，不要无差别包含整个 classpath。
+它告诉构建器把 `greeting.txt` 和 `public/` 下的前端产物放进二进制。运行时通过 classpath 流读取，内嵌资源不是磁盘文件，不能通过 `getResource(...).toURI()` 再转换成 `File` 读取。实际项目应精准包含需要的模板、静态文件、证书或国际化资源，不要无差别包含整个 classpath。`public/` 只放允许被浏览器访问的文件，不放密钥或内部配置。
+
+工作流在打包完成后，解压到源码之外的临时目录运行程序；`HTTP_RESOURCES_JSON` 会核对 HTML/JS/CSS/PNG 的类型和完整字节。这样不会因为程序偶然读到了源码目录中的文件而误判成功。
 
 ## 反射注册示例
 

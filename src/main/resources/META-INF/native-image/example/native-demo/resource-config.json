@@ -1,5 +1,8 @@
 {
   "resources": {
-    "includes": [{ "pattern": "\\Qgreeting.txt\\E" }]
+    "includes": [
+      { "pattern": "\\Qgreeting.txt\\E" },
+      { "pattern": "\\Qpublic/\\E.*" }
+    ]
   }
 }

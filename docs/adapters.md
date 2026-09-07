@@ -2,6 +2,8 @@
 
 下面是接入契约和配置片段，**不是已对所有框架、版本和 GUI 工具包跑过的兼容性认证**。本仓库默认构建的是根目录的 JDK CLI/HTTP 示例。框架项目应选用与 GraalVM for JDK 21 兼容的版本，并遵循该版本自己的原生构建文档。
 
+默认工作流现在验证内嵌页面、JS、CSS 和 PNG。套用下面的纯 CLI/API 示例时，将 `HTTP_RESOURCES_JSON` 设为 `'[]'`；有前端资源时改成自己项目的请求路径、产物路径和 MIME 类型。所有运行验证使用解压后的分发目录作为工作目录。
+
 ## 普通 Java / CLI / Javalin（Maven）
 
 根目录 `pom.xml` 是完整可运行示例：native profile 中配置 `native-maven-plugin`、入口类、输出名、`--no-fallback` 和 `-march=compatibility`。接入 CLI 时替换 `mainClass`、`imageName`，使用以下变量：
