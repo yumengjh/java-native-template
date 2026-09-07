@@ -1,3 +1,5 @@
+# 详细中文使用说明：同目录 README.md（.github/workflows/README.md）。
+# 复制到其他仓库时，必须同时保留 .github/scripts/native_ci.py。
 name: Java 21 原生二进制
 
 # 只允许手动触发；提交与打标签不会自动消耗构建资源。
